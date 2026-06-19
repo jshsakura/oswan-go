@@ -250,6 +250,74 @@ uint32_t WsCreate(char *CartName)
 	return 1;
 }
 
+/* G&W: load the cart ROM straight from memory-mapped external flash (XIP)
+ * instead of fopen()+malloc()+fread() per 64KB bank. WonderSwan ROMs reach
+ * 16MB and cannot be copied into RAM, so the bank map just points into flash.
+ * WS ROM is read-only (saves live in RAMMap), so XIP is safe. Mirrors
+ * WsCreate's footer parse (last 10 bytes: ROM size, save type, HV mode). */
+static uint8_t ws_cart_ram[0x10000]; /* single-bank cart SRAM/EEPROM backing */
+
+int ws_create_from_flash(const uint8_t *data, uint32_t size)
+{
+    char footer[10];
+    int32_t i;
+
+    for (i = 0; i < 256; i++) {
+        ROMMap[i] = MemDummy;
+        RAMMap[i] = MemDummy;
+    }
+    memset(IRAM, 0, sizeof(IRAM));
+    memset(MemDummy, 0xA0, sizeof(MemDummy));
+    memset(IO, 0, sizeof(IO));
+
+    if (data == NULL || size < 16)
+        return 1;
+
+    /* Copy the 10-byte footer out of read-only flash so WsRomPatch can poke it. */
+    memcpy(footer, data + size - 10, sizeof(footer));
+
+    switch (footer[4]) {
+    case 1: ROMBanks = 4;   break;
+    case 2: ROMBanks = 8;   break;
+    case 3: ROMBanks = 16;  break;
+    case 4: ROMBanks = 32;  break;
+    case 5: ROMBanks = 48;  break;
+    case 6: ROMBanks = 64;  break;
+    case 7: ROMBanks = 96;  break;
+    case 8: ROMBanks = 128; break;
+    case 9: ROMBanks = 256; break;
+    default: ROMBanks = (uint16_t)(size / 0x10000); break;
+    }
+    if (ROMBanks == 0)
+        return 1;
+
+    switch ((uint8_t)footer[5]) {
+    case 0x01: RAMBanks = 1; RAMSize = 0x2000;  CartKind = 0;      break;
+    case 0x02: RAMBanks = 1; RAMSize = 0x8000;  CartKind = 0;      break;
+    case 0x03: RAMBanks = 2; RAMSize = 0x20000; CartKind = 0;      break;
+    case 0x04: RAMBanks = 4; RAMSize = 0x40000; CartKind = 0;      break;
+    case 0x10: RAMBanks = 1; RAMSize = 0x80;    CartKind = CK_EEP; break;
+    case 0x20: RAMBanks = 1; RAMSize = 0x800;   CartKind = CK_EEP; break;
+    case 0x50: RAMBanks = 1; RAMSize = 0x400;   CartKind = CK_EEP; break;
+    default:   RAMBanks = 1; RAMSize = 0x2000;  CartKind = 0;      break;
+    }
+
+    WsRomPatch(footer);
+
+    /* Bank (0x100-ROMBanks+i) maps to the i-th 64KB block of the ROM. */
+    for (i = 0; i < ROMBanks; i++)
+        ROMMap[0x100 - ROMBanks + i] = (uint8_t *)(data + (uint32_t)i * 0x10000);
+
+    /* Cart save RAM in a static buffer (single bank; rare large multi-bank
+     * SRAM degrades to MemDummy rather than crashing). */
+    memset(ws_cart_ram, 0, sizeof(ws_cart_ram));
+    RAMMap[0] = ws_cart_ram;
+
+    SaveName[0] = 0;
+    HVMode = footer[6] & 1;
+    return 1;
+}
+
 void WsRelease(void)
 {
     FILE* fp;
