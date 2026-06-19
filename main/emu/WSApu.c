@@ -1,6 +1,9 @@
 #include <stdio.h>
+#include <string.h>
 
+#ifndef GNW_WSWAN
 #include <SDL/SDL.h>
+#endif
 
 #include "WSHard.h"
 #include "WSApu.h"

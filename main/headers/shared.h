@@ -12,6 +12,7 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 #ifndef GNW_WSWAN
 #include <dirent.h>
 #endif
