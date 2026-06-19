@@ -1,7 +1,9 @@
 #ifndef SOUND_H
 #define SOUND_H
 
+#ifndef GNW_WSWAN
 #include <SDL/SDL.h>
+#endif
 #include <stdint.h>
 
 extern void Init_Sound(void);
