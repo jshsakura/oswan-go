@@ -304,9 +304,24 @@ int ws_create_from_flash(const uint8_t *data, uint32_t size)
 
     WsRomPatch(footer);
 
-    /* Bank (0x100-ROMBanks+i) maps to the i-th 64KB block of the ROM. */
-    for (i = 0; i < ROMBanks; i++)
-        ROMMap[0x100 - ROMBanks + i] = (uint8_t *)(data + (uint32_t)i * 0x10000);
+    /* If the footer's size code disagrees with the actual image, trust the
+     * image so the bank math can't run off either end. */
+    if ((uint32_t)ROMBanks * 0x10000 > size)
+        ROMBanks = (uint16_t)(size / 0x10000);
+    if (ROMBanks == 0)
+        return 1;
+
+    /* Anchor banks to the END of the image (exactly like WsCreate's
+     * fseek-from-SEEK_END): bank (0x100-ROMBanks+i) lives at
+     * size-(ROMBanks-i)*64K. This keeps the reset vector / footer in the last
+     * bank correct even if the file has leading padding or isn't an exact
+     * multiple of 64KB. */
+    {
+        uint32_t total = (uint32_t)ROMBanks * 0x10000;
+        for (i = 0; i < ROMBanks; i++)
+            ROMMap[0x100 - ROMBanks + i] =
+                (uint8_t *)(data + (size - total) + (uint32_t)i * 0x10000);
+    }
 
     /* Cart save RAM in a static buffer (single bank; rare large multi-bank
      * SRAM degrades to MemDummy rather than crashing). */
