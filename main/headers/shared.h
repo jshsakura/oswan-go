@@ -3,6 +3,8 @@
 
 #ifdef _TINSPIRE
 #include <os.h>
+#elif defined(GNW_WSWAN)
+/* Game & Watch bare-metal build: no SDL, no POSIX directory APIs. */
 #else
 #include <SDL/SDL.h>
 #endif
@@ -10,7 +12,9 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <stdio.h>
+#ifndef GNW_WSWAN
 #include <dirent.h>
+#endif
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <sys/types.h>
