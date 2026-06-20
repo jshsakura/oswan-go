@@ -600,8 +600,14 @@ uint32_t WsLoadStateFromFile(FILE *fp)
     for (i = 0; i < RAMBanks; i++) fread(RAMMap[i], 1, bank, fp);
     fread(Palette, sizeof(uint16_t), 16 * 16, fp);
 
-    /* Replay the display/sound I/O writes so derived state is rebuilt (same as
-     * the FILE loader). */
+    /* Rebuild derived state that WriteIO caches outside IO[]. The display
+     * registers 0x00-0x3F are critical: WriteIO(0x07) recomputes Scr1TMap /
+     * Scr2TMap (the BG/FG tilemap base pointers) and 0x1C-0x3F rebuild the
+     * palette - without replaying them the tilemap base stays stale and the
+     * whole screen renders garbled. 0x00-0x3F are pure config (no DMA/sound
+     * trigger lives below 0x40), so replaying them is side-effect-safe. */
+    for (i = 0x00; i <= 0x3F; i++)
+        WriteIO(i, IO[i]);
     WriteIO(0xC1, IO[0xC1]);
     WriteIO(0xC2, IO[0xC2]);
     WriteIO(0xC3, IO[0xC3]);
