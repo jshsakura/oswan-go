@@ -154,9 +154,16 @@ static inline void MakeIndex(void)
 	}
 }
 
+/* When 0, the per-scanline pixel work is skipped (CPU still runs). The G&W
+ * front-end clears this on frames it won't display so the emulator can keep
+ * pace instead of rendering every frame. */
+int ws_render_enabled = 1;
+
 void RefreshLine(const uint16_t Line)
 {
     uint16_t *pSBuf;		/* データ書き込みバッファ */
+    if (!ws_render_enabled)
+        return;
     uint16_t *pSWrBuf;		/* ↑の書き込み位置用ポインタ*/
     uint8_t *pZ;		/* ↓のインクリメント用ポインタ*/
     uint8_t ZBuf[0x100];	/* FGレイヤーの非透明部を保存*/
