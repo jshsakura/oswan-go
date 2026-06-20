@@ -84,9 +84,11 @@ typedef enum { AL,AH,CL,CH,DL,DH,BL,BH,SPL,SPH,BPL,BPH,IXL,IXH,IYL,IYH } BREGS;
 #define read_port(port) cpu_readport(port)
 #define write_port(port,val) cpu_writeport(port,val)
 
-#define FETCH 	(cpu_readop_arg((I.sregs[CS]<<4)+I.ip++))
-#define FETCHOP (cpu_readop((I.sregs[CS]<<4)+I.ip++))
-#define FETCHuint16_t(var) { var=cpu_readop_arg((((I.sregs[CS]<<4)+I.ip)))+(cpu_readop_arg((((I.sregs[CS]<<4)+I.ip+1)))<<8); I.ip+=2; }
+/* cs_base == (I.sregs[CS]<<4), refreshed once per instruction in nec_execute. */
+extern uint32_t cs_base;
+#define FETCH 	(cpu_readop_arg(cs_base+I.ip++))
+#define FETCHOP (cpu_readop(cs_base+I.ip++))
+#define FETCHuint16_t(var) { var=cpu_readop_arg(cs_base+I.ip)+(cpu_readop_arg(cs_base+I.ip+1)<<8); I.ip+=2; }
 #define PUSH(val) { I.regs.w[SP]-=2; WriteWord((((I.sregs[SS]<<4)+I.regs.w[SP])),val); }
 #define POP(var) { var = ReadWord((((I.sregs[SS]<<4)+I.regs.w[SP]))); I.regs.w[SP]+=2; }
 #define PEEK(addr) ((uint8_t)cpu_readop_arg(addr))

@@ -62,6 +62,11 @@ typedef struct
 /***************************************************************************/
 
 int32_t nec_ICount;
+/* Cached (CS<<4). CS only changes at the END of an instruction (far jmp/call/
+ * ret/int set it after their operand fetches), so refreshing this once per
+ * dispatch iteration keeps every FETCH within the instruction correct while
+ * saving the per-fetch segment load+shift. */
+uint32_t cs_base;
 
 static nec_Regs I;
 
@@ -826,8 +831,9 @@ int32_t nec_execute(int32_t cycles)
 {
 	nec_ICount=cycles;
 
-	while(nec_ICount>=0) 
+	while(nec_ICount>=0)
 	{
+		cs_base = I.sregs[CS] << 4;
 		nec_instruction[FETCHOP]();
 	}
 
