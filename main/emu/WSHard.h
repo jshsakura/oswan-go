@@ -16,13 +16,25 @@ static inline uint8_t ReadMem(uint32_t A)
     return Page[(A >> 16) & 0xF][A & 0xFFFF];
 }
 void WriteMem(uint32_t A, uint8_t V);
+void WriteIRam(uint32_t A, uint8_t V);   /* bank 0 (internal RAM / VRAM) handler */
+
+/* Most CPU writes hit internal RAM/VRAM (bank 0). Branch there directly instead
+ * of an indirect call through WriteMemFnTable, which stalls the branch
+ * predictor on write-heavy games. Other banks keep the table dispatch. */
+static inline void WriteMemFast(uint32_t A, uint8_t V)
+{
+    if (((A >> 16) & 0x0F) == 0)
+        WriteIRam(A, V);
+    else
+        WriteMemFnTable[(A >> 16) & 0x0F](A, V);
+}
 void WriteIO(uint32_t A, uint8_t V);
 uint8_t ReadIO(uint32_t A);
 
 #define cpu_readop(A)               (ReadMem(A))
 #define cpu_readop_arg(A)           (ReadMem(A))
 #define cpu_readmem20(A)            (ReadMem(A))
-#define cpu_writemem20(A, D)        (WriteMem((A), (uint8_t)(D)))
+#define cpu_writemem20(A, D)        (WriteMemFast((A), (uint8_t)(D)))
 #define cpu_readport(port)          (ReadIO((port)))
 #define cpu_writeport(port, val)    (WriteIO((port), (uint8_t)(val)))
 #define cpu_readport16(port)        (ReadIO((port)))

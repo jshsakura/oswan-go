@@ -166,7 +166,7 @@ static void WriteRom(const uint32_t A, uint8_t V)
     /*ErrorMsg(ERR_WRITE_ROM);*/
 }
 
-static void WriteIRam(const uint32_t A, uint8_t V)
+void WriteIRam(const uint32_t A, uint8_t V)
 {
     IRAM[A & 0xFFFF] = V;
     if((A & 0xFE00) == 0xFE00)
