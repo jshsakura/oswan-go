@@ -531,4 +531,64 @@ uint32_t WsSaveState(const char *savename, uint32_t num)
     return 0;
 }
 
+/* --- Memory-based savestate (G&W front-end has no writable FILE storage) ---
+ * Mirrors WsSaveState/WsLoadState exactly, but to/from a caller buffer. The
+ * ROM stays in flash (XIP) and is never part of the snapshot. */
+
+static const int ws_state_nec_regs[] = {
+    NEC_IP, NEC_AW, NEC_BW, NEC_CW, NEC_DW, NEC_CS, NEC_DS, NEC_ES, NEC_SS,
+    NEC_IX, NEC_IY, NEC_BP, NEC_SP, NEC_FLAGS, NEC_VECTOR, NEC_PENDING,
+    NEC_NMI_STATE, NEC_IRQ_STATE,
+};
+#define WS_STATE_NEC_COUNT ((int)(sizeof(ws_state_nec_regs)/sizeof(ws_state_nec_regs[0])))
+
+uint32_t WsStateMemSize(void)
+{
+    uint32_t bank = (RAMSize < 0x10000) ? RAMSize : 0x10000;
+    return (uint32_t)(WS_STATE_NEC_COUNT * sizeof(uint32_t)
+                      + 0x10000               /* IRAM   */
+                      + 0x100                 /* IO     */
+                      + (uint32_t)RAMBanks * bank
+                      + 16 * 16 * sizeof(uint16_t)); /* Palette */
+}
+
+void WsSaveStateMem(uint8_t *p)
+{
+    uint32_t i;
+    uint32_t bank = (RAMSize < 0x10000) ? RAMSize : 0x10000;
+    for (i = 0; i < (uint32_t)WS_STATE_NEC_COUNT; i++) {
+        uint32_t v = nec_get_reg(ws_state_nec_regs[i]);
+        memcpy(p, &v, sizeof(uint32_t)); p += sizeof(uint32_t);
+    }
+    memcpy(p, IRAM, 0x10000); p += 0x10000;
+    memcpy(p, IO,   0x100);   p += 0x100;
+    for (i = 0; i < RAMBanks; i++) { memcpy(p, RAMMap[i], bank); p += bank; }
+    memcpy(p, Palette, 16 * 16 * sizeof(uint16_t));
+}
+
+uint32_t WsLoadStateMem(const uint8_t *p)
+{
+    uint32_t i;
+    uint32_t bank = (RAMSize < 0x10000) ? RAMSize : 0x10000;
+    for (i = 0; i < (uint32_t)WS_STATE_NEC_COUNT; i++) {
+        uint32_t v;
+        memcpy(&v, p, sizeof(uint32_t)); p += sizeof(uint32_t);
+        nec_set_reg(ws_state_nec_regs[i], v);
+    }
+    memcpy(IRAM, p, 0x10000); p += 0x10000;
+    memcpy(IO,   p, 0x100);   p += 0x100;
+    for (i = 0; i < RAMBanks; i++) { memcpy(RAMMap[i], p, bank); p += bank; }
+    memcpy(Palette, p, 16 * 16 * sizeof(uint16_t));
+
+    /* Replay the display/sound I/O writes so derived state is rebuilt (same as
+     * the FILE loader). */
+    WriteIO(0xC1, IO[0xC1]);
+    WriteIO(0xC2, IO[0xC2]);
+    WriteIO(0xC3, IO[0xC3]);
+    WriteIO(0xC0, IO[0xC0]);
+    for (i = 0x80; i <= 0x90; i++)
+        WriteIO(i, IO[i]);
+    return 0;
+}
+
 
