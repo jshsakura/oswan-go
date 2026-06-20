@@ -5,7 +5,16 @@
 
 typedef void  (*WriteMemFn) (uint32_t A, uint8_t V);
 extern WriteMemFn WriteMemFnTable[0x10];
-uint8_t ReadMem(uint32_t A);
+
+/* Bank-mapped guest memory. ReadMem is the single hottest op in the emulator
+ * (every opcode fetch + operand read), so inline the bank lookup here instead
+ * of paying a cross-file call - LTO is disabled on this target. WriteMem keeps
+ * its banking side effects and stays out of line. */
+extern uint8_t *Page[16];
+static inline uint8_t ReadMem(uint32_t A)
+{
+    return Page[(A >> 16) & 0xF][A & 0xFFFF];
+}
 void WriteMem(uint32_t A, uint8_t V);
 void WriteIO(uint32_t A, uint8_t V);
 uint8_t ReadIO(uint32_t A);

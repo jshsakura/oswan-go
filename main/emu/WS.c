@@ -153,10 +153,8 @@ void ComEeprom(struct EEPROM *eeprom, const uint16_t *cmd, uint16_t *data)
     }
 }
 
-uint8_t ReadMem(const uint32_t A)
-{
-    return Page[(A >> 16) & 0xF][A & 0xFFFF];
-}
+/* ReadMem is now a static inline in WSHard.h (hot path, inlined into the CPU
+ * core). */
 
 void WriteMem(const uint32_t A, uint8_t V)
 {
