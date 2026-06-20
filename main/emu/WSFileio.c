@@ -553,11 +553,22 @@ static const int ws_state_nec_regs[] = {
 /* Write the full machine state straight to an open file. No intermediate
  * buffer, so large multi-bank SRAM games can't overflow a fixed scratch (that
  * silently dropped saves and left load reading stale data -> corrupt screen). */
+/* Header so a save from an incompatible build (or a stale/short file) is
+ * rejected on load instead of being applied as garbage -> corrupt screen. */
+#define WS_STATE_MAGIC   0x53575347u   /* 'GSWS' */
+#define WS_STATE_VERSION 1u
+
 uint32_t WsSaveStateToFile(FILE *fp)
 {
     uint32_t i;
     uint32_t bank = (RAMSize < 0x10000) ? RAMSize : 0x10000;
+    uint32_t hdr[4];
     if (!fp) return 1;
+    hdr[0] = WS_STATE_MAGIC;
+    hdr[1] = WS_STATE_VERSION;
+    hdr[2] = RAMBanks;
+    hdr[3] = RAMSize;
+    if (fwrite(hdr, sizeof(uint32_t), 4, fp) != 4) return 1;
     for (i = 0; i < (uint32_t)WS_STATE_NEC_COUNT; i++) {
         uint32_t v = nec_get_reg(ws_state_nec_regs[i]);
         if (fwrite(&v, sizeof(uint32_t), 1, fp) != 1) return 1;
@@ -573,7 +584,12 @@ uint32_t WsLoadStateFromFile(FILE *fp)
 {
     uint32_t i;
     uint32_t bank = (RAMSize < 0x10000) ? RAMSize : 0x10000;
+    uint32_t hdr[4];
     if (!fp) return 1;
+    /* Reject saves from another build / wrong cart layout / short files. */
+    if (fread(hdr, sizeof(uint32_t), 4, fp) != 4) return 1;
+    if (hdr[0] != WS_STATE_MAGIC || hdr[1] != WS_STATE_VERSION) return 1;
+    if (hdr[2] != RAMBanks || hdr[3] != RAMSize) return 1;
     for (i = 0; i < (uint32_t)WS_STATE_NEC_COUNT; i++) {
         uint32_t v;
         if (fread(&v, sizeof(uint32_t), 1, fp) != 1) return 1;
