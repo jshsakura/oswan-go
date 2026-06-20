@@ -923,11 +923,11 @@ uint32_t WsRun(void)
     int32_t i, iack, inum;
     int32_t cycle;
     
-    #ifdef NATIVE_SOUND
-    #define CYCLES 1720
-    #else
-    #define CYCLES 1706
-    #endif
+    /* One WonderSwan frame is 159 scanlines x 8 Interrupt() steps per HBlank =
+     * 1272 iterations. The stock 1706 ran ~1.34 frames per WsRun, so calling it
+     * once per displayed frame ran the game (and audio) ~1.34x too fast. Run
+     * exactly one frame so the front-end's per-frame pacing is correct. */
+    #define CYCLES 1272
     
     for(i = 0; i < CYCLES; i++)
     {
