@@ -10,9 +10,9 @@
 #define SND_BNKSIZE 256
 #define SND_RNGSIZE (32 * SND_BNKSIZE) /* Was 10 * SND_BNKSIZE */
 #else
-#define BUFSIZEN    0x10000
+#define BUFSIZEN    0x1000  /* noise table length; 0x10000 = 640KB BSS, overflowed RAM_EMU */
 #define SND_BNKSIZE 512
-#define SND_RNGSIZE (32 * SND_BNKSIZE) /* Was 10 * SND_BNKSIZE */
+#define SND_RNGSIZE (8 * SND_BNKSIZE)  /* ~4k-sample audio ring (was 32*) */
 #endif
 
 #define MULT 3
