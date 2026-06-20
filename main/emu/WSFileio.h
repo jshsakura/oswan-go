@@ -12,8 +12,7 @@ void WsLoadEeprom(void);
 void WsSaveEeprom(void);
 uint32_t WsLoadState(const char *savename, uint32_t num);
 uint32_t WsSaveState(const char *savename, uint32_t num);
-uint32_t WsStateMemSize(void);
-void     WsSaveStateMem(uint8_t *p);
-uint32_t WsLoadStateMem(const uint8_t *p);
+uint32_t WsSaveStateToFile(FILE *fp);
+uint32_t WsLoadStateFromFile(FILE *fp);
 
 #endif

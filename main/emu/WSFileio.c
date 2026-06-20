@@ -255,7 +255,8 @@ uint32_t WsCreate(char *CartName)
  * 16MB and cannot be copied into RAM, so the bank map just points into flash.
  * WS ROM is read-only (saves live in RAMMap), so XIP is safe. Mirrors
  * WsCreate's footer parse (last 10 bytes: ROM size, save type, HV mode). */
-static uint8_t ws_cart_ram[0x10000]; /* single-bank cart SRAM/EEPROM backing */
+#define WS_CART_RAM_BANKS 4   /* max SRAM banks a WS cart declares (4 x 64KB) */
+static uint8_t ws_cart_ram[WS_CART_RAM_BANKS * 0x10000]; /* cart SRAM/EEPROM backing */
 
 int ws_create_from_flash(const uint8_t *data, uint32_t size)
 {
@@ -323,10 +324,17 @@ int ws_create_from_flash(const uint8_t *data, uint32_t size)
                 (uint8_t *)(data + (size - total) + (uint32_t)i * 0x10000);
     }
 
-    /* Cart save RAM in a static buffer (single bank; rare large multi-bank
-     * SRAM degrades to MemDummy rather than crashing). */
+    /* Cart save RAM, backed by one static buffer covering every bank the cart
+     * declares (up to 4 x 64KB). Map each bank to its slice so multi-bank SRAM
+     * games keep real, contiguous storage instead of aliasing MemDummy. */
     memset(ws_cart_ram, 0, sizeof(ws_cart_ram));
-    RAMMap[0] = ws_cart_ram;
+    {
+        uint32_t b;
+        uint32_t banks = RAMBanks;
+        if (banks > WS_CART_RAM_BANKS) banks = WS_CART_RAM_BANKS;
+        for (b = 0; b < banks; b++)
+            RAMMap[b] = ws_cart_ram + b * 0x10000;
+    }
 
     SaveName[0] = 0;
     HVMode = footer[6] & 1;
@@ -542,43 +550,39 @@ static const int ws_state_nec_regs[] = {
 };
 #define WS_STATE_NEC_COUNT ((int)(sizeof(ws_state_nec_regs)/sizeof(ws_state_nec_regs[0])))
 
-uint32_t WsStateMemSize(void)
-{
-    uint32_t bank = (RAMSize < 0x10000) ? RAMSize : 0x10000;
-    return (uint32_t)(WS_STATE_NEC_COUNT * sizeof(uint32_t)
-                      + 0x10000               /* IRAM   */
-                      + 0x100                 /* IO     */
-                      + (uint32_t)RAMBanks * bank
-                      + 16 * 16 * sizeof(uint16_t)); /* Palette */
-}
-
-void WsSaveStateMem(uint8_t *p)
+/* Write the full machine state straight to an open file. No intermediate
+ * buffer, so large multi-bank SRAM games can't overflow a fixed scratch (that
+ * silently dropped saves and left load reading stale data -> corrupt screen). */
+uint32_t WsSaveStateToFile(FILE *fp)
 {
     uint32_t i;
     uint32_t bank = (RAMSize < 0x10000) ? RAMSize : 0x10000;
+    if (!fp) return 1;
     for (i = 0; i < (uint32_t)WS_STATE_NEC_COUNT; i++) {
         uint32_t v = nec_get_reg(ws_state_nec_regs[i]);
-        memcpy(p, &v, sizeof(uint32_t)); p += sizeof(uint32_t);
+        if (fwrite(&v, sizeof(uint32_t), 1, fp) != 1) return 1;
     }
-    memcpy(p, IRAM, 0x10000); p += 0x10000;
-    memcpy(p, IO,   0x100);   p += 0x100;
-    for (i = 0; i < RAMBanks; i++) { memcpy(p, RAMMap[i], bank); p += bank; }
-    memcpy(p, Palette, 16 * 16 * sizeof(uint16_t));
+    fwrite(IRAM, 1, 0x10000, fp);
+    fwrite(IO,   1, 0x100,   fp);
+    for (i = 0; i < RAMBanks; i++) fwrite(RAMMap[i], 1, bank, fp);
+    fwrite(Palette, sizeof(uint16_t), 16 * 16, fp);
+    return 0;
 }
 
-uint32_t WsLoadStateMem(const uint8_t *p)
+uint32_t WsLoadStateFromFile(FILE *fp)
 {
     uint32_t i;
     uint32_t bank = (RAMSize < 0x10000) ? RAMSize : 0x10000;
+    if (!fp) return 1;
     for (i = 0; i < (uint32_t)WS_STATE_NEC_COUNT; i++) {
         uint32_t v;
-        memcpy(&v, p, sizeof(uint32_t)); p += sizeof(uint32_t);
+        if (fread(&v, sizeof(uint32_t), 1, fp) != 1) return 1;
         nec_set_reg(ws_state_nec_regs[i], v);
     }
-    memcpy(IRAM, p, 0x10000); p += 0x10000;
-    memcpy(IO,   p, 0x100);   p += 0x100;
-    for (i = 0; i < RAMBanks; i++) { memcpy(RAMMap[i], p, bank); p += bank; }
-    memcpy(Palette, p, 16 * 16 * sizeof(uint16_t));
+    if (fread(IRAM, 1, 0x10000, fp) != 0x10000) return 1;
+    if (fread(IO,   1, 0x100,   fp) != 0x100)   return 1;
+    for (i = 0; i < RAMBanks; i++) fread(RAMMap[i], 1, bank, fp);
+    fread(Palette, sizeof(uint16_t), 16 * 16, fp);
 
     /* Replay the display/sound I/O writes so derived state is rebuilt (same as
      * the FILE loader). */
