@@ -384,6 +384,20 @@ void WriteIO(uint32_t A, uint8_t V)
             V &= 0x7F;
         }
         break;
+    case 0x52: /* Sound DMA (Hyper Voice) control */
+        if(V & 0x80)
+        {
+            /* PCM voice playback to channel 2 isn't emulated; mark the
+             * transfer instantly complete (zero the count, clear the
+             * busy/enable bit) so games that start a voice DMA and then poll
+             * SDMACTL/SDMACNT for completion proceed instead of hanging at
+             * full speed (e.g. One Piece - Grand Battle Swan Colosseum). */
+            IO[SDMACNT]     = 0;
+            IO[SDMACNT + 1] = 0;
+            IO[SDMACNT + 2] = 0;
+            V &= 0x7F;
+        }
+        break;
 	case 0x60:
 		/* Write Video Mode here */
 	break;
