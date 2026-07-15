@@ -949,22 +949,41 @@ uint32_t WsRun(void)
     #define CYCLES 1272
     
     /* cpu_idle (set by nec_execute when the V30 is provably spin-waiting for an
-     * interrupt) lets us advance the hardware WITHOUT running the CPU: it does
-     * nothing while parked, and nothing writes the memory it polls until its own
-     * ISR runs — which needs the interrupt below, and that un-parks it. Skipping
-     * whole slices this way is the real win (the poll spans dozens of slices),
-     * and it is bit-exact: the Interrupt() cadence, hence every hardware event,
-     * is unchanged. */
+     * interrupt) lets us advance the hardware without dispatching instructions.
+     * A parked slice is not a no-op, though: nec_idle_sim_slice replays the
+     * interpreter's cycle arithmetic over the recorded loop pattern, so
+     * ws_run_period (the slice budget carry) evolves EXACTLY as if the CPU had
+     * spun for real — mid-frame raster timing depends on it. Before an
+     * interrupt is delivered, nec_idle_wake really executes the partial loop
+     * iteration up to the boundary the spin would have reached, so nec_int
+     * sees the true registers, IF and CS:IP to stack. Cycle-exact, not just
+     * state-exact: an unskipped run is reproduced boundary for boundary. */
     extern int cpu_idle;
+    extern int32_t nec_idle_sim_slice(int32_t budget);
+    extern void nec_idle_wake(void);
     for(i = 0; i < CYCLES; i++)
     {
-        if(!cpu_idle)
+        if(cpu_idle)
+        {
+            cycle = nec_idle_sim_slice(ws_run_period);
+            if(cycle < 0)
+            {
+                cpu_idle = 0;   /* cannot simulate from here: run for real */
+                cycle = nec_execute(ws_run_period);
+            }
+        }
+        else
         {
             cycle = nec_execute(ws_run_period);
-            ws_run_period += IPeriod - cycle;
         }
+        ws_run_period += IPeriod - cycle;
         if(Interrupt())
         {
+            if(cpu_idle)
+            {
+                nec_idle_wake();   /* materialize the CPU at the spin's true boundary */
+                cpu_idle = 0;
+            }
             iack = IO[IRQACK];
             for(inum = 7; inum >= 0; inum--)
             {
@@ -975,7 +994,6 @@ uint32_t WsRun(void)
                 iack <<= 1;
             }
             nec_int((inum + IO[IRQBSE]) << 2);
-            cpu_idle = 0;   /* the delivered interrupt un-parks the CPU */
         }
     }
     return 0;
