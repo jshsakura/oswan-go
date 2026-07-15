@@ -12,7 +12,7 @@ extern uint8_t *SprETMap;
 extern uint8_t SprTMap[512];
 extern uint16_t Palette[16][16];
 extern uint16_t MonoColor[8];
-extern const uint8_t Layer[3];
+extern uint8_t Layer[3];
 
 #ifndef NOSDL_FB
 extern uint16_t* FrameBuffer;

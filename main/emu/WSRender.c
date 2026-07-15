@@ -30,7 +30,7 @@ uint16_t FrameBuffer[240*144];
 uint16_t* FrameBuffer;
 #endif
 
-const uint8_t Layer[3] = {1, 1, 1};
+uint8_t Layer[3] = {1, 1, 1};   /* BG/FG/sprite enable (non-const: rig profiling lever) */
 
 uint8_t *pbTData;
 uint32_t Index0[2];			// 32bit access to Index
@@ -54,6 +54,35 @@ void SetPalette(const uint32_t addr)
 	Palette[(addr & 0x1E0)>>5][(addr & 0x1E) >> 1] = pal;
 }
 
+/* Bit-spread tables for the planar (non-packed) tile formats. The stock code
+ * de-interleaves each plane byte's 8 bits into 8 pixel slots with a column of
+ * shift/mask expressions per pixel; that is the dominant BG/FG cost (rig: BG+FG
+ * ~= 1.66M insn/frame in One Piece battle). Precompute the per-plane spread once
+ * and OR the planes together at plane weight, cutting MakeIndex's arithmetic
+ * roughly in half. Byte-for-byte identical to the expressions below (rig RUNHASH
+ * gate proves it), so no visible change.
+ *
+ *   sprd_lo[b]  bytes 0..3 = bit7,bit6,bit5,bit4 of b   (pixels 0..3, normal)
+ *   sprd_hi[b]  bytes 0..3 = bit3,bit2,bit1,bit0 of b   (pixels 4..7, normal)
+ *   sprd_lo_r/hi_r: the SPR_HREV bit order (bit0,bit1,.. / bit4,bit5,..)
+ */
+static uint32_t sprd_lo[256], sprd_hi[256], sprd_lo_r[256], sprd_hi_r[256];
+static int ws_render_tbl_ready = 0;
+static void ws_render_init_tables(void)
+{
+	for (int b = 0; b < 256; b++) {
+		uint32_t lo = 0, hi = 0, lor = 0, hir = 0;
+		for (int i = 0; i < 4; i++) {
+			lo  |= (uint32_t)((b >> (7 - i)) & 1) << (i * 8);
+			hi  |= (uint32_t)((b >> (3 - i)) & 1) << (i * 8);
+			lor |= (uint32_t)((b >> i)       & 1) << (i * 8);
+			hir |= (uint32_t)((b >> (4 + i)) & 1) << (i * 8);
+		}
+		sprd_lo[b] = lo; sprd_hi[b] = hi; sprd_lo_r[b] = lor; sprd_hi_r[b] = hir;
+	}
+	ws_render_tbl_ready = 1;
+}
+
 static inline void MakeIndex(void)
 {
 	register uint_fast8_t pbTData0 = pbTData[0];
@@ -64,14 +93,8 @@ static inline void MakeIndex(void)
 	switch ( ((IO[COLCTL] & 0x60)>>5) | ((TMap & SPR_HREV)>>12) )
 	{
 	case 0:		// 4 Colors
-		Index0[0] = (( pbTData0>>7   )|((pbTData1>>6)&2))	|
-			    (((pbTData0>>6)&1)|((pbTData1>>5)&2))<<8	|
-			    (((pbTData0>>5)&1)|((pbTData1>>4)&2))<<16	|
-			    (((pbTData0>>4)&1)|((pbTData1>>3)&2))<<24	;
-		Index0[1] = (((pbTData0>>3)&1)|((pbTData1>>2)&2))	|
-			    (((pbTData0>>2)&1)|((pbTData1>>1)&2))<<8	|
-			    (((pbTData0>>1)&1)|( pbTData1    &2))<<16	|
-			    (( pbTData0    &1)|((pbTData1<<1)&2))<<24	;
+		Index0[0] = sprd_lo[pbTData0] | (sprd_lo[pbTData1] << 1);
+		Index0[1] = sprd_hi[pbTData0] | (sprd_hi[pbTData1] << 1);
 		break;
 	case 1:		// 4 Colors	Packed Mode
 		Index0[0] =  (pbTData0>>6   )		|
@@ -86,14 +109,10 @@ static inline void MakeIndex(void)
 	case 2:		// 16 Colors
 		pbTData2 = pbTData[2];
 		pbTData3 = pbTData[3];
-		Index0[0] = (( pbTData0>>7   )|((pbTData1>>6)&2)|((pbTData2>>5)&4)|((pbTData3>>4)&8))		|
-			    (((pbTData0>>6)&1)|((pbTData1>>5)&2)|((pbTData2>>4)&4)|((pbTData3>>3)&8))<<8	|
-			    (((pbTData0>>5)&1)|((pbTData1>>4)&2)|((pbTData2>>3)&4)|((pbTData3>>2)&8))<<16	|
-			    (((pbTData0>>4)&1)|((pbTData1>>3)&2)|((pbTData2>>2)&4)|((pbTData3>>1)&8))<<24	;
-		Index0[1] = (((pbTData0>>3)&1)|((pbTData1>>2)&2)|((pbTData2>>1)&4)|( pbTData3    &8))		|
-			    (((pbTData0>>2)&1)|((pbTData1>>1)&2)|( pbTData2    &4)|((pbTData3<<1)&8))<<8	|
-			    (((pbTData0>>1)&1)|( pbTData1    &2)|((pbTData2<<1)&4)|((pbTData3<<2)&8))<<16	|
-			    (( pbTData0    &1)|((pbTData1<<1)&2)|((pbTData2<<2)&4)|((pbTData3<<3)&8))<<24	;
+		Index0[0] = sprd_lo[pbTData0] | (sprd_lo[pbTData1] << 1)
+			  | (sprd_lo[pbTData2] << 2) | (sprd_lo[pbTData3] << 3);
+		Index0[1] = sprd_hi[pbTData0] | (sprd_hi[pbTData1] << 1)
+			  | (sprd_hi[pbTData2] << 2) | (sprd_hi[pbTData3] << 3);
 		break;
 	case 3:		// 16 Colors	Packed Mode
 		pbTData2 = pbTData[2];
@@ -108,14 +127,8 @@ static inline void MakeIndex(void)
 			    (pbTData3 & 0x0F)<<24	;
 		break;
 	case 4:		// 4 Colors			SPR_HREV
-		Index0[0] = (( pbTData0    &1)|((pbTData1<<1)&2))	|
-			    (((pbTData0>>1)&1)|( pbTData1    &2))<<8	|
-			    (((pbTData0>>2)&1)|((pbTData1>>1)&2))<<16	|
-			    (((pbTData0>>3)&1)|((pbTData1>>2)&2))<<24	;
-		Index0[1] = (((pbTData0>>4)&1)|((pbTData1>>3)&2))	|
-			    (((pbTData0>>5)&1)|((pbTData1>>4)&2))<<8	|
-			    (((pbTData0>>6)&1)|((pbTData1>>5)&2))<<16	|
-			    (( pbTData0>>7   )|((pbTData1>>6)&2))<<24	;
+		Index0[0] = sprd_lo_r[pbTData0] | (sprd_lo_r[pbTData1] << 1);
+		Index0[1] = sprd_hi_r[pbTData0] | (sprd_hi_r[pbTData1] << 1);
 		break;
 	case 5:		// 4 Colors	Packed Mode	SPR_HREV
 		Index0[0] = ( pbTData1    &3)		|
@@ -130,14 +143,10 @@ static inline void MakeIndex(void)
 	case 6:		// 16 Colors 			SPR_HREV
 		pbTData2 = pbTData[2];
 		pbTData3 = pbTData[3];
-		Index0[0] = (( pbTData0    &1)|((pbTData1<<1)&2)|((pbTData2<<2)&4)|((pbTData3<<3)&8))		|
-			    (((pbTData0>>1)&1)|( pbTData1    &2)|((pbTData2<<1)&4)|((pbTData3<<2)&8))<<8	|
-			    (((pbTData0>>2)&1)|((pbTData1>>1)&2)|( pbTData2    &4)|((pbTData3<<1)&8))<<16	|
-			    (((pbTData0>>3)&1)|((pbTData1>>2)&2)|((pbTData2>>1)&4)|( pbTData3    &8))<<24	;
-		Index0[1] = (((pbTData0>>4)&1)|((pbTData1>>3)&2)|((pbTData2>>2)&4)|((pbTData3>>1)&8))		|
-			    (((pbTData0>>5)&1)|((pbTData1>>4)&2)|((pbTData2>>3)&4)|((pbTData3>>2)&8))<<8	|
-			    (((pbTData0>>6)&1)|((pbTData1>>5)&2)|((pbTData2>>4)&4)|((pbTData3>>3)&8))<<16	|
-			    (( pbTData0>>7   )|((pbTData1>>6)&2)|((pbTData2>>5)&4)|((pbTData3>>4)&8))<<24	;
+		Index0[0] = sprd_lo_r[pbTData0] | (sprd_lo_r[pbTData1] << 1)
+			  | (sprd_lo_r[pbTData2] << 2) | (sprd_lo_r[pbTData3] << 3);
+		Index0[1] = sprd_hi_r[pbTData0] | (sprd_hi_r[pbTData1] << 1)
+			  | (sprd_hi_r[pbTData2] << 2) | (sprd_hi_r[pbTData3] << 3);
 		break;
 	case 7:		// 16 Colors	Packed Mode	SPR_HREV
 		pbTData2 = pbTData[2];
@@ -164,6 +173,8 @@ void RefreshLine(const uint16_t Line)
     uint16_t *pSBuf;		/* データ書き込みバッファ */
     if (!ws_render_enabled)
         return;
+    if (!ws_render_tbl_ready)
+        ws_render_init_tables();
     uint16_t *pSWrBuf;		/* ↑の書き込み位置用ポインタ*/
     uint8_t *pZ;		/* ↓のインクリメント用ポインタ*/
     uint8_t ZBuf[0x100];	/* FGレイヤーの非透明部を保存*/
@@ -228,14 +239,34 @@ void RefreshLine(const uint16_t Line)
             PalIndex = (TMap & MAP_PAL) >> 9;
 	    TMapTemp = ((TMap & 0x0800) || (IO[COLCTL] & 0x40));
 
-            if (!((!Index[0]) && (TMapTemp))) *(pSWrBuf+0) = Palette[PalIndex][Index[0]];
-            if (!((!Index[1]) && (TMapTemp))) *(pSWrBuf+1) = Palette[PalIndex][Index[1]];
-            if (!((!Index[2]) && (TMapTemp))) *(pSWrBuf+2) = Palette[PalIndex][Index[2]];
-            if (!((!Index[3]) && (TMapTemp))) *(pSWrBuf+3) = Palette[PalIndex][Index[3]];
-            if (!((!Index[4]) && (TMapTemp))) *(pSWrBuf+4) = Palette[PalIndex][Index[4]];
-            if (!((!Index[5]) && (TMapTemp))) *(pSWrBuf+5) = Palette[PalIndex][Index[5]];
-            if (!((!Index[6]) && (TMapTemp))) *(pSWrBuf+6) = Palette[PalIndex][Index[6]];
-            if (!((!Index[7]) && (TMapTemp))) *(pSWrBuf+7) = Palette[PalIndex][Index[7]];
+            /* Hoist the palette row and lift the per-tile TMapTemp branch out of
+             * the 8 per-pixel writes. TMapTemp is constant for the whole tile:
+             * when 0 every pixel is opaque (8 straight stores); when 1 index 0 is
+             * transparent. Same stores as the per-pixel form above (rig-verified),
+             * just without re-indexing Palette[PalIndex] and re-testing TMapTemp
+             * eight times. */
+            {
+                const uint16_t *pal = Palette[PalIndex];
+                if (TMapTemp) {
+                    if (Index[0]) pSWrBuf[0] = pal[Index[0]];
+                    if (Index[1]) pSWrBuf[1] = pal[Index[1]];
+                    if (Index[2]) pSWrBuf[2] = pal[Index[2]];
+                    if (Index[3]) pSWrBuf[3] = pal[Index[3]];
+                    if (Index[4]) pSWrBuf[4] = pal[Index[4]];
+                    if (Index[5]) pSWrBuf[5] = pal[Index[5]];
+                    if (Index[6]) pSWrBuf[6] = pal[Index[6]];
+                    if (Index[7]) pSWrBuf[7] = pal[Index[7]];
+                } else {
+                    pSWrBuf[0] = pal[Index[0]];
+                    pSWrBuf[1] = pal[Index[1]];
+                    pSWrBuf[2] = pal[Index[2]];
+                    pSWrBuf[3] = pal[Index[3]];
+                    pSWrBuf[4] = pal[Index[4]];
+                    pSWrBuf[5] = pal[Index[5]];
+                    pSWrBuf[6] = pal[Index[6]];
+                    pSWrBuf[7] = pal[Index[7]];
+                }
+            }
 	    pSWrBuf+=8;
         }
     }
@@ -294,14 +325,33 @@ void RefreshLine(const uint16_t Line)
             PalIndex = (TMap & MAP_PAL) >> 9;
 	    TMapTemp = ((TMap & 0x0800) || (IO[COLCTL] & 0x40));
 
-            if ( !(((!Index[0]) && (TMapTemp)) || (*(pW+0))) ) { *(pSWrBuf+0) = Palette[PalIndex][Index[0]]; *(pZ+0) = 1; }
-            if ( !(((!Index[1]) && (TMapTemp)) || (*(pW+1))) ) { *(pSWrBuf+1) = Palette[PalIndex][Index[1]]; *(pZ+1) = 1; }
-            if ( !(((!Index[2]) && (TMapTemp)) || (*(pW+2))) ) { *(pSWrBuf+2) = Palette[PalIndex][Index[2]]; *(pZ+2) = 1; }
-            if ( !(((!Index[3]) && (TMapTemp)) || (*(pW+3))) ) { *(pSWrBuf+3) = Palette[PalIndex][Index[3]]; *(pZ+3) = 1; }
-            if ( !(((!Index[4]) && (TMapTemp)) || (*(pW+4))) ) { *(pSWrBuf+4) = Palette[PalIndex][Index[4]]; *(pZ+4) = 1; }
-            if ( !(((!Index[5]) && (TMapTemp)) || (*(pW+5))) ) { *(pSWrBuf+5) = Palette[PalIndex][Index[5]]; *(pZ+5) = 1; }
-            if ( !(((!Index[6]) && (TMapTemp)) || (*(pW+6))) ) { *(pSWrBuf+6) = Palette[PalIndex][Index[6]]; *(pZ+6) = 1; }
-            if ( !(((!Index[7]) && (TMapTemp)) || (*(pW+7))) ) { *(pSWrBuf+7) = Palette[PalIndex][Index[7]]; *(pZ+7) = 1; }
+            /* Same lift as the BG layer: hoist the palette row, split the tile's
+             * constant TMapTemp out of the 8 writes. The per-pixel window mask
+             * (pW) still gates each store, and pZ is still set on every write, so
+             * the result is identical (rig-verified) — the redundant re-work per
+             * pixel is what's removed. */
+            {
+                const uint16_t *pal = Palette[PalIndex];
+                if (TMapTemp) {
+                    if (Index[0] && !pW[0]) { pSWrBuf[0] = pal[Index[0]]; pZ[0] = 1; }
+                    if (Index[1] && !pW[1]) { pSWrBuf[1] = pal[Index[1]]; pZ[1] = 1; }
+                    if (Index[2] && !pW[2]) { pSWrBuf[2] = pal[Index[2]]; pZ[2] = 1; }
+                    if (Index[3] && !pW[3]) { pSWrBuf[3] = pal[Index[3]]; pZ[3] = 1; }
+                    if (Index[4] && !pW[4]) { pSWrBuf[4] = pal[Index[4]]; pZ[4] = 1; }
+                    if (Index[5] && !pW[5]) { pSWrBuf[5] = pal[Index[5]]; pZ[5] = 1; }
+                    if (Index[6] && !pW[6]) { pSWrBuf[6] = pal[Index[6]]; pZ[6] = 1; }
+                    if (Index[7] && !pW[7]) { pSWrBuf[7] = pal[Index[7]]; pZ[7] = 1; }
+                } else {
+                    if (!pW[0]) { pSWrBuf[0] = pal[Index[0]]; pZ[0] = 1; }
+                    if (!pW[1]) { pSWrBuf[1] = pal[Index[1]]; pZ[1] = 1; }
+                    if (!pW[2]) { pSWrBuf[2] = pal[Index[2]]; pZ[2] = 1; }
+                    if (!pW[3]) { pSWrBuf[3] = pal[Index[3]]; pZ[3] = 1; }
+                    if (!pW[4]) { pSWrBuf[4] = pal[Index[4]]; pZ[4] = 1; }
+                    if (!pW[5]) { pSWrBuf[5] = pal[Index[5]]; pZ[5] = 1; }
+                    if (!pW[6]) { pSWrBuf[6] = pal[Index[6]]; pZ[6] = 1; }
+                    if (!pW[7]) { pSWrBuf[7] = pal[Index[7]]; pZ[7] = 1; }
+                }
+            }
             pW+=8; pZ+=8; pSWrBuf+=8;
         }
     }
