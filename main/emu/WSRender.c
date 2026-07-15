@@ -274,16 +274,21 @@ void RefreshLine(const uint16_t Line)
     memset(ZBuf, 0, sizeof(ZBuf));
     if((IO[DSPCTL] & 0x02) && Layer[1])          /* FG layer表示 */
     {
+        /* Fill ALL of WBuf, pads included: fine scroll makes the tile loop read
+         * pW = WBuf+8-OffsetX, i.e. WBuf[0..7] (and past 231 on the right), and
+         * upstream left those bytes as stack garbage — the garbage only gates
+         * never-displayed margin pixels, but it makes the rendered buffer
+         * nondeterministic, which poisons any whole-buffer comparison. */
         if((IO[DSPCTL] & 0x30) == 0x20) {	/* ウィンドウ内部のみに表示 */
-            for(i = 0, pW = WBuf + 8; i < 224; i+=4) *(uint32_t*)(pW+i) = 0x01010101;
+            memset(WBuf, 1, sizeof(WBuf));
             if((Line >= IO[SCR2WT]) && (Line <= IO[SCR2WB]))
                 { for(i = IO[SCR2WL], pW = WBuf + 8 + i; (i <= IO[SCR2WR]) && (i < 224); i++) *pW++ = 0; }
         } else if((IO[DSPCTL] & 0x30) == 0x30) {/* ウィンドウ外部のみに表示 */
-            for(i = 0, pW = WBuf + 8; i < 224; i+=4) *(uint32_t*)(pW+i) = 0;
+            memset(WBuf, 0, sizeof(WBuf));
             if((Line >= IO[SCR2WT]) && (Line <= IO[SCR2WB]))
                 { for(i = IO[SCR2WL], pW = WBuf + 8 + i; (i <= IO[SCR2WR]) && (i < 224); i++) *pW++ = 1; }
         } else {
-	    for(i = 0, pW = WBuf + 8; i < 224; i+=4) *(uint32_t*)(pW+i) = 0;
+	    memset(WBuf, 0, sizeof(WBuf));
 	}
 
         OffsetX = IO[SCR2X] & 0x07;
@@ -360,7 +365,7 @@ void RefreshLine(const uint16_t Line)
     {
         if (IO[DSPCTL] & 0x08)     /* Sprite window */
         {
-            for (i = 0, pW = WBuf + 8; i < 224; i+=4) *(uint32_t*)(pW+i) = 0x01010101;
+            memset(WBuf, 1, sizeof(WBuf));   /* pads too — see the FG note above */
             if ((Line >= IO[SPRWT]) && (Line <= IO[SPRWB]))
                 { for (i = IO[SPRWL], pW = WBuf + 8 + i; (i <= IO[SPRWR]) && (i < 224); i++) *pW++ = 0; }
         }
