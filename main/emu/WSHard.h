@@ -21,8 +21,10 @@ void WriteIRam(uint32_t A, uint8_t V);   /* bank 0 (internal RAM / VRAM) handler
 /* Most CPU writes hit internal RAM/VRAM (bank 0). Branch there directly instead
  * of an indirect call through WriteMemFnTable, which stalls the branch
  * predictor on write-heavy games. Other banks keep the table dispatch. */
+extern int nec_idle_dirty;   /* nec.c idle-skip: any memory write is progress */
 static inline void WriteMemFast(uint32_t A, uint8_t V)
 {
+    nec_idle_dirty = 1;
     if (((A >> 16) & 0x0F) == 0)
         WriteIRam(A, V);
     else

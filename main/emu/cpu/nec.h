@@ -81,8 +81,12 @@ typedef enum { AL,AH,CL,CH,DL,DH,BL,BH,SPL,SPH,BPL,BPH,IXL,IXH,IYL,IYH } BREGS;
 #define WriteByte(ea,val) {cpu_writemem20((ea),val); }
 #define WriteWord(ea,val) {cpu_writemem20((ea),(uint8_t)(val)); cpu_writemem20(((ea)+1),(val)>>8); }
 
-#define read_port(port) cpu_readport(port)
-#define write_port(port,val) cpu_writeport(port,val)
+/* Any IO access is "progress" for the idle-skip (ReadIO is not pure — the RTC
+ * port advances a counter per read — and IO the CPU polls is changed outside
+ * it), so a loop that touches IO is never parked as idle. */
+extern int nec_loop_io;
+#define read_port(port) (nec_loop_io = 1, cpu_readport(port))
+#define write_port(port,val) (nec_loop_io = 1, cpu_writeport(port,val))
 
 /* cs_base == (I.sregs[CS]<<4), refreshed once per instruction in nec_execute. */
 extern uint32_t cs_base;

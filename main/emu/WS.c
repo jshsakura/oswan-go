@@ -948,10 +948,21 @@ uint32_t WsRun(void)
      * exactly one frame so the front-end's per-frame pacing is correct. */
     #define CYCLES 1272
     
+    /* cpu_idle (set by nec_execute when the V30 is provably spin-waiting for an
+     * interrupt) lets us advance the hardware WITHOUT running the CPU: it does
+     * nothing while parked, and nothing writes the memory it polls until its own
+     * ISR runs — which needs the interrupt below, and that un-parks it. Skipping
+     * whole slices this way is the real win (the poll spans dozens of slices),
+     * and it is bit-exact: the Interrupt() cadence, hence every hardware event,
+     * is unchanged. */
+    extern int cpu_idle;
     for(i = 0; i < CYCLES; i++)
     {
-        cycle = nec_execute(ws_run_period);
-        ws_run_period += IPeriod - cycle;
+        if(!cpu_idle)
+        {
+            cycle = nec_execute(ws_run_period);
+            ws_run_period += IPeriod - cycle;
+        }
         if(Interrupt())
         {
             iack = IO[IRQACK];
@@ -964,6 +975,7 @@ uint32_t WsRun(void)
                 iack <<= 1;
             }
             nec_int((inum + IO[IRQBSE]) << 2);
+            cpu_idle = 0;   /* the delivered interrupt un-parks the CPU */
         }
     }
     return 0;
