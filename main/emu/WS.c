@@ -931,9 +931,14 @@ int32_t Interrupt(void)
     return IO[IRQACK];
 }
 
+/* Cross-frame cycle-budget carry. Promoted from a WsRun static to file scope so
+ * savestates capture it — a cold resume that starts it at IPeriod instead of the
+ * saved carry runs the first frame's first nec_execute on a different budget,
+ * shifting interrupt interleaving. */
+int32_t ws_run_period = IPeriod;
+
 uint32_t WsRun(void)
 {
-    static int32_t period = IPeriod;
     int32_t i, iack, inum;
     int32_t cycle;
     
@@ -945,8 +950,8 @@ uint32_t WsRun(void)
     
     for(i = 0; i < CYCLES; i++)
     {
-        cycle = nec_execute(period);
-        period += IPeriod - cycle;
+        cycle = nec_execute(ws_run_period);
+        ws_run_period += IPeriod - cycle;
         if(Interrupt())
         {
             iack = IO[IRQACK];

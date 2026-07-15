@@ -25,6 +25,22 @@ static uint8_t PData[4][32];
 static uint8_t PDataN[8][BUFSIZEN];
 static uint16_t RandData[BUFSIZEN];
 
+/* Runtime phase/position accumulators. These were function-local statics in
+ * apuShiftReg/apuVoice/apuWaveSet; promoted to file scope so a savestate can
+ * capture them. The savestate's WriteIO(0x80-0x90) replay rebuilds the channel
+ * config (Ch/Swp.on/Noise/VoiceOn/PData) but NOT these accumulators — they are
+ * not IO-mapped. Leaving them at reset on a cold load makes a game that polls
+ * sound-DMA completion (One Piece's voice DMA: IO[SDMACTL] bit7, gated by the
+ * apuVoice DMA position) or reads the noise register (NCSR = RandData[apu_nPos])
+ * see the wrong value and hang. apuSaveState/apuLoadState (below) serialise them.
+ * PDataN/RandData are apuInit-filled constant tables (identical every boot), so
+ * they are not part of the snapshot. */
+uint32_t apu_nPos = 0;               /* apuShiftReg noise read position (-> NCSR) */
+int32_t  apu_voice_index = 0;        /* apuVoice sound-DMA sample position */
+int32_t  apu_voice_b = 0;            /* apuVoice sound-DMA bank offset */
+uint16_t apu_point[4]    = {0,0,0,0};/* apuWaveSet per-channel wave phase */
+uint16_t apu_preindex[4] = {0,0,0,0};/* apuWaveSet per-channel previous index */
+
 extern uint8_t *Page[16];
 extern uint8_t IO[0x100];
 
@@ -71,6 +87,33 @@ void apuInit(void)
         RandData[i] = apuMrand(15);
     }
     apuWaveCreate();
+}
+
+/* Savestate hooks for the runtime accumulators the WriteIO replay cannot rebuild
+ * (noise read position, sound-DMA position, wave phase, sweep countdown). Fixed
+ * 32-byte layout; if it changes, bump the container's WS_STATE_VERSION so old
+ * files are rejected rather than misread. Ch/Swp.on/Noise/VoiceOn/PData are NOT
+ * here — the 0x80-0x90 WriteIO replay reconstructs them from restored IO+IRAM. */
+uint32_t apuStateSize(void) { return 32; }
+
+void apuSaveState(uint8_t *p)
+{
+    memcpy(p, &apu_nPos, 4);        p += 4;
+    memcpy(p, &apu_voice_index, 4); p += 4;
+    memcpy(p, &apu_voice_b, 4);     p += 4;
+    memcpy(p, apu_point, 8);        p += 8;
+    memcpy(p, apu_preindex, 8);     p += 8;
+    memcpy(p, &Swp.cnt, 4);
+}
+
+void apuLoadState(const uint8_t *p)
+{
+    memcpy(&apu_nPos, p, 4);        p += 4;
+    memcpy(&apu_voice_index, p, 4); p += 4;
+    memcpy(&apu_voice_b, p, 4);     p += 4;
+    memcpy(apu_point, p, 8);        p += 8;
+    memcpy(apu_preindex, p, 8);     p += 8;
+    memcpy(&Swp.cnt, p, 4);
 }
 
 void apuEnd(void)
@@ -162,15 +205,16 @@ void apuSetPData(int32_t addr, uint8_t val)
 
 uint8_t apuVoice(void)
 {
-    static int32_t index = 0, b = 0;
+    /* apu_voice_index / apu_voice_b: file-scope so savestates capture the
+     * sound-DMA position (was function-local static index/b). */
     uint8_t v;
 
     if ((IO[SDMACTL] & 0x98) == 0x98) /* Hyper voice */
-    { 
-        v = Page[IO[SDMASH] + b][*(uint16_t*)(IO + SDMASL) + index++];
-        if ((*(uint16_t*)(IO + SDMASL) + index) == 0)
+    {
+        v = Page[IO[SDMASH] + apu_voice_b][*(uint16_t*)(IO + SDMASL) + apu_voice_index++];
+        if ((*(uint16_t*)(IO + SDMASL) + apu_voice_index) == 0)
         {
-            b++;
+            apu_voice_b++;
         }
         if (v < 0x80)
         {
@@ -180,26 +224,26 @@ uint8_t apuVoice(void)
         {
             v -= 0x80;
         }
-        if (*(uint16_t*)(IO+SDMACNT) <= index)
+        if (*(uint16_t*)(IO+SDMACNT) <= apu_voice_index)
         {
-            index = 0;
-            b = 0;
+            apu_voice_index = 0;
+            apu_voice_b = 0;
         }
         return v;
     }
     else if ((IO[SDMACTL] & 0x88) == 0x80) /* DMA start */
-    { 
-        IO[SND2VOL] = Page[IO[SDMASH] + b][*(uint16_t*)(IO + SDMASL) + index++];
-        if ((*(uint16_t*)(IO + SDMASL) + index) == 0)
+    {
+        IO[SND2VOL] = Page[IO[SDMASH] + apu_voice_b][*(uint16_t*)(IO + SDMASL) + apu_voice_index++];
+        if ((*(uint16_t*)(IO + SDMASL) + apu_voice_index) == 0)
         {
-            b++;
+            apu_voice_b++;
         }
-        if (*(uint16_t*)(IO + SDMACNT) <= index)
+        if (*(uint16_t*)(IO + SDMACNT) <= apu_voice_index)
         {
             IO[SDMACTL] &= 0x7F; /* DMA end */
             *(uint16_t*)(IO + SDMACNT) = 0;
-            index = 0;
-            b = 0;
+            apu_voice_index = 0;
+            apu_voice_b = 0;
         }
     }
     return ((VoiceOn && Sound[4]) ? IO[SND2VOL] : 0x80);
@@ -221,13 +265,12 @@ void apuSweep(void)
 
 uint16_t apuShiftReg(void)
 {
-    static uint32_t nPos = 0;
-    /* Noise counter */
-    if (++nPos >= BUFSIZEN)
+    /* Noise counter (apu_nPos: file-scope so savestates capture it) */
+    if (++apu_nPos >= BUFSIZEN)
     {
-        nPos = 0;
+        apu_nPos = 0;
     }
-    return RandData[nPos];
+    return RandData[apu_nPos];
 }
 
 void apuWaveSet(void)
@@ -240,17 +283,17 @@ void apuWaveSet(void)
 	* size for them. This should hopefully make things faster on
 	* some platforms. No FPU needed !
 	*/
-	static uint16_t point[4] = {0, 0, 0, 0};
-    static uint16_t preindex[4] = {0, 0, 0, 0};
+	/* point[]/preindex[] promoted to file-scope apu_point[]/apu_preindex[] so
+	 * savestates capture the per-channel wave phase (was function-local static). */
     uint16_t value = 0, lVol[4] = {0, 0, 0, 0}, rVol[4] = {0, 0, 0, 0};
     int16_t LL, RR, vVol;
     uint16_t index;
     uint32_t channel;
 
     Sound_APU_Start();
-    
+
     apuSweep();
-    
+
     for (channel = 0; channel < 4; channel++)
     {
         if (Ch[channel].on)
@@ -265,29 +308,29 @@ void apuWaveSet(void)
             }
             else if (channel == 3 && Noise.on && Sound[6])
             {
-                index = (3072000 / BPSWAV) * point[3] / (2048 - Ch[3].freq);
-                if ((index %= BUFSIZEN) == 0 && preindex[3])
+                index = (3072000 / BPSWAV) * apu_point[3] / (2048 - Ch[3].freq);
+                if ((index %= BUFSIZEN) == 0 && apu_preindex[3])
                 {
-                    point[3] = 0;
+                    apu_point[3] = 0;
                 }
-                
+
 				value = PDataN[Noise.pattern][index] - 8;
             }
             else if (Sound[channel] == 0)
             {
                 continue;
             }
-            else 
+            else
             {
-                index = (3072000 / BPSWAV) * point[channel] / (2048 - Ch[channel].freq);
-                if ((index %= 32) == 0 && preindex[channel])
+                index = (3072000 / BPSWAV) * apu_point[channel] / (2048 - Ch[channel].freq);
+                if ((index %= 32) == 0 && apu_preindex[channel])
                 {
-                    point[channel] = 0;
+                    apu_point[channel] = 0;
                 }
                 value = PData[channel][index] - 8;
             }
-            preindex[channel] = index;
-            point[channel]++;
+            apu_preindex[channel] = index;
+            apu_point[channel]++;
             lVol[channel] = value * Ch[channel].volL; /* -8*15=-120, 7*15=105 */
             rVol[channel] = value * Ch[channel].volR;
         }
